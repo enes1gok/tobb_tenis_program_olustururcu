@@ -1,12 +1,15 @@
 import streamlit as st
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from oauth2client.service_account import Credentials
 from datetime import datetime
 import pandas as pd
 
 # --- Google Sheets Bağlantısı ---
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name("/Users/enesgok/Documents/DataScienceDocuments/tobb_tenis_program_oluşturucu/credentials.json", scope)
+service_account_info = st.secrets["google_service_account"]
+
+# Google Sheets API yetkilendirme
+scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+creds = Credentials.from_service_account_info(service_account_info, scopes=scope)
 client = gspread.authorize(creds)
 
 # Google Sheet bağlantısı
