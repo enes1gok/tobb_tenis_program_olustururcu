@@ -1,6 +1,6 @@
 import streamlit as st
 import gspread
-from oauth2client.service_account import Credentials
+from google.oauth2.service_account import Credentials
 from datetime import datetime
 import pandas as pd
 
@@ -13,8 +13,11 @@ creds = Credentials.from_service_account_info(service_account_info, scopes=scope
 client = gspread.authorize(creds)
 
 # Google Sheet bağlantısı
-spreadsheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1EMwasKdHp8otQ0Rxeu0qqGg6RSj30DhjlDK4dCA37aA/edit?usp=sharing")
-worksheet = spreadsheet.sheet1
+try:
+    spreadsheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1EMwasKdHp8otQ0Rxeu0qqGg6RSj30DhjlDK4dCA37aA/edit?usp=sharing")
+    worksheet = spreadsheet.sheet1
+except Exception as e:
+    st.error(f"Google Sheet'e bağlanırken hata oluştu: {e}")
 
 @st.cache_data(ttl=300)
 def get_data():
@@ -37,7 +40,8 @@ data = get_data()
 
 # Günler ve Saatler
 days = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
-hours = [f"{h:02d}:00" for h in range(9, 21)]
+time_slots = [datetime.strptime(f"{h}:{m:02d}", "%H:%M") for h in range(7, 22) for m in [0, 15, 30, 45]] # saat aralığını dilediğin gibi ayarla
+max_capacity = 6
 
 st.set_page_config(page_title="Tenis Ders Takvimi", layout="wide")
 st.title("🎾 TOBB Tenis Ders Takvimi")
@@ -46,77 +50,82 @@ st.title("🎾 TOBB Tenis Ders Takvimi")
 if "selected_session" not in st.session_state:
     st.session_state.selected_session = None
 
-# --- Takvim ---
 st.subheader("📅 Haftalık Takvim")
 calendar_cols = st.columns(len(days))
-max_capacity = 6
 
 for i, day in enumerate(days):
     with calendar_cols[i]:
         st.markdown(f"**{day}**")
-        for hour in hours:
+        for hour in time_slots:
             session_df = data[(data["Gün"] == day) & (data["Saat"] == hour)]
             count = len(session_df)
-            key = f"{day}-{hour}"
-
-            seviye_raw = session_df.iloc[0]["Seviye"] if not session_df.empty else "-"
-            seviye = f"{seviye_raw}"
-
-            durum_emoji = "🟢" if count < max_capacity else "🔴"
-            label = f"{durum_emoji} {hour}\n{seviye} | {count}/{max_capacity}"
-
-            # ✅ Tıklanabilirlik kontrolü
-            clicked = st.button(label, key=key, disabled=(count >= max_capacity))
-            if clicked:
-                st.session_state.selected_session = (day, hour)
-
-# --- Kayıt Formu (sadece seans seçildiyse görünür) ---
-if "selected_session" in st.session_state and st.session_state["selected_session"]:
-    st.markdown("---")
-    st.subheader("📝 Seans Kaydı")
-
-    selected_day, selected_hour = st.session_state.selected_session
-    session_df = data[(data["Gün"] == selected_day) & (data["Saat"] == selected_hour)]
-    count = len(session_df)
-    seviye = session_df.iloc[0]["Seviye"] if not session_df.empty else "-"
-    durum_emoji = "🟢 Müsait" if count < max_capacity else "🔴 Dolu"
-
-    # Seans bilgileri kutusu
-    st.markdown(
-        f"""
-        <div style="background-color:#000000; padding:10px; border-radius:10px; border:1px solid #ddd">
-            <b>📅 Seçilen Seans:</b> {selected_day} - {selected_hour}<br/>
-            <b>🎯 Seviye:</b> <span style='color:gold'><b>{seviye}</b></span><br/>
-            <b>👥 Kayıt Sayısı:</b> {count}/{max_capacity}<br/>
-            <b>📌 Durum:</b> {durum_emoji}
-        </div>
-        """, unsafe_allow_html=True
-    )
-
-    # Kayıt formu
-    with st.form("register_form"):
-        col1, col2 = st.columns(2)
-        with col1:
-            ad = st.text_input("Ad")
-            soyad = st.text_input("Soyad")
-        with col2:
-            seviye_input = st.selectbox("Seviye", ["Başlangıç", "Orta", "İleri"])
-
-        submitted = st.form_submit_button("Kaydı Tamamla")
-
-        if submitted:
-            # Güncel doluluğu tekrar kontrol et
-            current_data = get_data()
-            count = len(current_data[(current_data["Gün"] == selected_day) & (current_data["Saat"] == selected_hour)])
-            if count >= max_capacity:
-                st.error("❌ Bu seans artık dolu. Lütfen başka bir saat seçin.")
+            seviye = session_df.iloc[0]["Seviye"] if not session_df.empty else "-"
+            label = f"{hour.strftime('%H:%M')}<br/><span style='font-size:12px'>{seviye if count > 0 else ''}</span><br/><b>{count}/{max_capacity}</b>"
+            # Renk & buton durumu
+            if count == 0:
+                # Hiç kayıt olmayan saat: gösterilmesin
+                st.markdown(
+                    f"<div style='border:1px dashed #CCC; padding:6px; border-radius:6px; margin-bottom:6px; background:#F9F9F9; text-align:center; color:#999'>{hour.strftime('%H:%M')}</div>",
+                    unsafe_allow_html=True
+                )
             else:
-                # Kayıt eklendikten sonra:
-                worksheet.append_row([ad, soyad, seviye_input, selected_day, selected_hour, str(datetime.now())])
-                get_data.clear()  # 👈 önbelleği sıfırla
-                st.success(f"✅ Kayıt başarıyla alındı: {selected_day} - {selected_hour}")
-                st.session_state.selected_session = None
-                st.rerun()
+                box_color = "#D4EDDA" if count < max_capacity else "#F8D7DA"
+                text_color = "#155724" if count < max_capacity else "#721C24"
+                border_color = "#C3E6CB" if count < max_capacity else "#F5C6CB"
+
+                clicked = st.button(
+                    label="",
+                    key=f"{day}_{hour}",
+                    help=f"{day} {hour} - {seviye} - {count}/{max_capacity}",
+                    args=(day, hour),
+                )
+
+                st.markdown(
+                    f"""
+                    <div style='background-color:{box_color}; color:{text_color}; border:2px solid {border_color};
+                                border-radius:8px; padding:6px; text-align:center; margin-bottom:6px'>
+                        {label}
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+                if clicked:
+                    st.session_state.selected_session = (day, hour)
+
+st.subheader("📝 Seans Kaydı")
+
+with st.form("register_form"):
+    col1, col2 = st.columns(2)
+
+    with col1:
+        ad = st.text_input("Ad")
+        soyad = st.text_input("Soyad")
+        seviye = st.selectbox("Seviye", ["Başlangıç", "Orta", "İleri"])
+
+    with col2:
+        gün = st.selectbox("Gün", ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"])
+        baslangic_saat = st.time_input("Başlangıç Saati")
+        bitis_saat = st.time_input("Bitiş Saati")
+
+    submitted = st.form_submit_button("Kaydı Tamamla")
+
+    if submitted:
+        if bitis_saat <= baslangic_saat:
+            st.error("❌ Bitiş saati, başlangıç saatinden sonra olmalıdır.")
+        elif not ad or not soyad:
+            st.warning("Lütfen tüm bilgileri eksiksiz doldurun.")
+        else:
+            # Veriyi kaydet (örnek):
+            worksheet.append_row([
+                ad, soyad, seviye, gün,
+                baslangic_saat.strftime("%H:%M"),
+                bitis_saat.strftime("%H:%M"),
+                str(datetime.now())
+            ])
+            get_data.clear()
+            st.success(f"✅ Kayıt alındı: {gün} {baslangic_saat.strftime('%H:%M')} - {bitis_saat.strftime('%H:%M')}")
+            st.rerun()
 
 # --- Kayıt Listesi ---
 st.markdown("---")
